@@ -1,0 +1,148 @@
+To set up Ngrok with your existing Jenkins pipeline (which runs Python tests using `pytest`), follow these steps to expose your Jenkins server to the internet for GitHub webhook integration. Here's how you can integrate **Ngrok** into your current pipeline and configure it for GitHub webhooks:
+
+### **Steps for Setting Up Ngrok with Jenkins**
+
+1. **Download and Install Ngrok**:
+   - Download **Ngrok** for your operating system:
+     - **Windows**: [Ngrok for Windows](https://ngrok.com/download)
+     - **Linux**: [Ngrok for Linux](https://ngrok.com/download)
+   
+   - **For Windows**:
+     1. Download and extract `ngrok.zip`.
+     2. Place `ngrok.exe` in a folder (e.g., `C:\ngrok\`).
+     3. Add the folder containing `ngrok.exe` to your system’s `PATH` variable.
+
+   - **For Linux**:
+     1. Download and extract `ngrok`.
+     2. Move `ngrok` to `/usr/local/bin/` to make it accessible from anywhere.
+
+2. **Sign Up for an Ngrok Account**:
+   - Go to [Ngrok's website](https://ngrok.com/) and create an account.
+   - Once you have logged in, go to the **Dashboard** to get your **auth token**.
+
+3. **Authenticate Ngrok**:
+   - To use Ngrok, you need to authenticate it with your account. Use the **auth token** from the Ngrok dashboard to do so:
+     ```bash
+     ngrok authtoken <your-ngrok-auth-token>
+     ```
+
+4. **Update Your Jenkins Pipeline**:
+   Modify your Jenkins pipeline to start Ngrok in the **`Start Ngrok`** stage, expose the Jenkins port, and then retrieve the public URL. Below is the full Jenkins pipeline with Ngrok integration.
+
+### **Updated Jenkins Pipeline with Ngrok Integration**
+
+```groovy
+pipeline {
+    agent any
+    environment {
+        NGROK_AUTH_TOKEN = credentials('ngrok-auth-token') // Use your stored Ngrok Auth Token as a Jenkins secret
+    }
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', url: 'https://github.com/cyberspacekash/fslab.git'
+            }
+        }
+        stage('Start Ngrok') {
+            steps {
+                script {
+                    // Start Ngrok to expose Jenkins on port 8080 (Jenkins default)
+                    bat "ngrok authtoken ${env.NGROK_AUTH_TOKEN}" // Authenticate Ngrok with your token
+                    bat "start /B ngrok http 8080 > ngrok.log 2>&1" // Start Ngrok in the background
+                    
+                    // Wait for Ngrok to initialize and retrieve the public URL
+                    sleep(5) // Allow Ngrok to start up
+                    def ngrokOutput = readFile('ngrok.log') // Read the Ngrok log
+                    def ngrokUrl = ngrokOutput.find(/http:\/\/[a-z0-9]+\.ngrok\.io/) // Extract the Ngrok URL from the log
+                    if (!ngrokUrl) {
+                        error("Failed to retrieve Ngrok URL")
+                    }
+                    echo "Ngrok URL: ${ngrokUrl}"
+                    env.NGROK_URL = ngrokUrl // Set Ngrok URL as an environment variable
+                }
+            }
+        }
+        stage('Set Up Webhook in GitHub') {
+            steps {
+                script {
+                    // Inform the user to configure the GitHub webhook manually
+                    echo "Set up the GitHub webhook with the URL: ${env.NGROK_URL}/github-webhook/"
+                    echo "Please go to GitHub Settings > Webhooks and use the URL ${env.NGROK_URL}/github-webhook/"
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                bat 'pip install -r requirements.txt'
+                bat 'pip install pytest'
+            }
+        }
+        stage('Run Tests') {
+            steps {
+                bat 'pytest' // Run Python tests using pytest
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                // Terminate Ngrok after pipeline execution
+                bat "taskkill /F /IM ngrok.exe" // Kill the Ngrok process
+            }
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
+```
+
+### **Explanation of Pipeline Changes**
+
+1. **Authenticate Ngrok**:
+   - The pipeline uses the Ngrok auth token (`NGROK_AUTH_TOKEN`) that you store as a Jenkins credential.
+   
+2. **Start Ngrok**:
+   - Ngrok starts on port 8080 (`ngrok http 8080`), which is typically where Jenkins runs. This step exposes Jenkins to the internet.
+   - The Ngrok URL is captured from the log (`ngrok.log`) and saved as an environment variable (`NGROK_URL`).
+
+3. **Set Up GitHub Webhook**:
+   - After running the pipeline, the webhook URL is shown (`${env.NGROK_URL}/github-webhook/`).
+   - You need to manually configure the GitHub webhook with this URL in the **GitHub Settings > Webhooks** section.
+
+4. **Terminate Ngrok**:
+   - After the pipeline finishes, Ngrok is stopped using `taskkill` to free up resources.
+
+---
+
+### **Manual Steps for GitHub Webhook Configuration**
+
+After running the pipeline and receiving the Ngrok URL:
+
+1. **Go to GitHub**:
+   - Open the **Settings** of your repository.
+   - Navigate to **Webhooks** in the left menu.
+   - Click **Add webhook**.
+
+2. **Configure Webhook**:
+   - **Payload URL**: Use the generated Ngrok URL with `/github-webhook/` appended to it, like this:
+     ```
+     http://<ngrok-url>/github-webhook/
+     ```
+     Replace `<ngrok-url>` with the actual Ngrok URL that is printed in Jenkins logs.
+   - **Content type**: `application/json`.
+   - **Which events would you like to trigger this webhook?**:
+     - Select **Just the push event** or any other event based on your use case.
+   - **Active**: Ensure this is checked.
+
+3. **Save the Webhook**.
+
+---
+
+### **Additional Notes**
+
+- **Ngrok URL Expiry**: Every time you run the pipeline, Ngrok generates a new URL. If you plan to use the webhook repeatedly, you’ll need to update it with the new URL for every new pipeline run.
+- **Ngrok Limitations**: Ngrok is designed for temporary use, so it's not a permanent solution for production. For a permanent solution, consider using a reverse proxy like **Nginx**.
